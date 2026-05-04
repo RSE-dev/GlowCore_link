@@ -1,437 +1,218 @@
-
-# RSE Serial Control Protocol
+# GlowCore Audio Serial Control Protocol
 
 **Version 1.0**
 
-This repository contains the specification and reference implementation of a generalized USB-based control protocol for studio effect devices—such as preamps, compressors, equalizers, delay/reverb units, and more—connecting them to a host PC.  
-
----
-
-## Table of Contents
-
-1. [Overview](#overview)  
-2. [Packet Structure](#Packet-Structure)  
-3. [Field Descriptions](#field-descriptions)  
-   - [ProtocolVersion](#protocolversion)  
-   - [SystemID](#systemid)  
-   - [PacketSequence](#packetsequence)  
-   - [MessageID](#messageid)  
-   - [ComponentID (Parameter Identifiers)](#componentid-parameter-identifiers)  
-   - [MessageValue](#messagevalue)  
-4. [CRC4 Calculation](#crc4-calculation)  
-5. [Typical Command Sequences](#typical-command-sequences)  
-   - [Device Identification](#device-identification)  
-   - [Setting a Compressor Parameter](#setting-a-compressor-parameter)  
-   - [Reading an Equalizer Band Gain](#reading-an-equalizer-band-gain)  
-   - [Real-Time Metering (33 Hz)](#real-time-metering-33hz)  
-6. [Error Handling & Codes](#error-handling--codes)  
-7. [ComponentID Extension Guidelines](#componentid-extension-guidelines)  
-8. [Implementation Notes](#implementation-notes)    
+This repository contains the specification and reference implementation of a compact USB-based control protocol for GlowCore Audio studio effect devices, including tube compressors, tube saturators, equalizers, preamps, and future hardware units.
 
 ---
 
 ## 1. Overview
 
-This protocol defines a compact, 32-bit message format for bidirectional control and status-monitoring between a host PC (USB “host”) and a variety of studio effect devices (USB “device”). By standardizing on fixed-size packets and an extensible `ComponentID` namespace, it can cover:
+The protocol defines a fixed 32-bit message format for bidirectional control and status monitoring between a host PC and a connected audio hardware device. By standardizing the packet layout and using an extensible `ComponentID` namespace, the same link layer can support multiple device families without changing the packet format.
 
-- **Preamps** (gain, impedance, phantom power, pan)  
-- **Compressors** (threshold, ratio, attack, release, makeup, mode)  
-- **Equalizers** (three-band parametric/graphic)  
-- **Effects** (delay, reverb, wet/dry mix, feedback, etc.)  
-- **Real-Time Meters** (input level, output level, compression amount, temperature)  
-- **Service & Identification** (device ID, firmware version, host-service channel)
+Supported or reserved parameter categories include:
 
-By following the guidelines below, new device types or specialized parameters can be added without altering the core packet format.
+- **Preamps**: gain, impedance, phantom power, pan.
+- **Compressors**: threshold, ratio, attack, release, makeup gain, mode.
+- **Saturators**: input gain, mix, output gain, tube/transistor bias controls, pre/post EQ, bypass.
+- **Equalizers**: band frequency, gain, and Q controls.
+- **Effects**: delay, reverb, wet/dry mix, feedback.
+- **Real-time meters**: level, reduction, compression amount, temperature or status values.
+- **Service and identification**: device ID, firmware version, host-service channel.
 
 ---
 
 ## 2. Packet Structure
 
-All messages are exactly **32 bits** (4 bytes). Bit-fields are packed as follows:
+All messages are exactly **32 bits** / **4 bytes**.
 
-```
+```text
 ┌───────────────────────────────────────────────────────────┐
-| 0–2   | ProtocolVersion  | Protocol version (currently 1) |  3 bits |
-| 3–4   | SystemID         | System ID (PC/device)           |  2 bits |
-| 5–9   | PacketSequence   | Packet sequence number          |  5 bits |
-| 10–17 | ComponentID      | Component/parameter identifier  |  8 bits |
-| 18–19 | MessageID        | Message type                    |  2 bits |
-| 20–27 | MessageValue     | Payload value (0–255)           |  8 bits |
-| 28–31 | CheckSum         | CRC4 over lower 28 bits         |  4 bits |
+| 0–2   | ProtocolVersion  | Protocol version              |  3 bits |
+| 3–4   | SystemID         | Host/device ID                 |  2 bits |
+| 5–9   | PacketSequence   | Packet sequence number         |  5 bits |
+| 10–17 | ComponentID      | Component/parameter ID         |  8 bits |
+| 18–19 | MessageID        | Message type                   |  2 bits |
+| 20–27 | MessageValue     | Payload value                  |  8 bits |
+| 28–31 | CheckSum         | CRC4 over lower 28 bits        |  4 bits |
 └───────────────────────────────────────────────────────────┘
 ```
 
-- **Total size**: 32 bits (4 bytes).  
-- **Endianess**: Transmitted in big-endian bit order (MSB first).
+The checksum covers the lower 28 bits, from `ProtocolVersion` through `MessageValue`.
 
 ---
 
-## 3. Field Descriptions
+## 3. System IDs
 
-### ProtocolVersion
+`SystemID` identifies the packet destination or origin.
 
-- **Bit 0–2**  
-- Always set to `1` for this version of the protocol. In future revisions, increment this field.
+| Value | Name                      | Description                         |
+|:-----:|---------------------------|-------------------------------------|
+| `0`   | `UNDEFINED_SYS_ID`        | Undefined / invalid system          |
+| `1`   | `PC_HOST_ID`              | Host PC                             |
+| `2`   | `GCA_LEX_MASTERCOM_ID`    | GlowCore Audio LEX compressor       |
+| `3`   | `GCA_NASTY_SATURATOR_ID`  | GlowCore Audio Nasty tube saturator |
+
+Current C definition:
 
 ```c
-typedef enum {
-  RSE_LINK_VER_1 = 1
-} RSE_LINK_VER;
+typedef enum{
+UNDEFINED_SYS_ID = 0,
+PC_HOST_ID,
+GCA_LEX_MASTERCOM_ID,
+GCA_NASTY_SATURATOR_ID
+}GCA_SYSTEM_ID;
 ```
 
 ---
 
-### SystemID
+## 4. Message IDs
 
-- **Bit 3–4**  
-- Specifies the origin or destination of the packet:
-
-| Value | Name                        | Description             |
-|:-----:|-----------------------------|-------------------------|
-| `0`   | PC_HOST_ID                  | Host PC (USB host)      |
-| `1`   | RSE_LEX_MASTERCOM_CH1_ID    | Rse LEX compressor Left |
-| `2`   | RSE_LEX_MASTERCOM_CH2_ID    | Rse LEX compressor Right|
-
-*(Additional values can be reserved for specific manufacturers or device families.)*
-
-```c
-typedef enum {
-  PC_HOST_ID           = 0,
-  RSE_LEX_MASTERCOM_CH1_ID = 1,
-  RSE_LEX_MASTERCOM_CH2_ID = 2
-} RSE_SYSTEM_ID;
-```
+| Value | Enum                 | Description                                      |
+|:-----:|----------------------|--------------------------------------------------|
+| `0`   | `READ_VALUE_MSG`     | Host requests the current parameter value        |
+| `1`   | `SET_VALUE_MSG`      | Host sets a new parameter value                  |
+| `2`   | `UPDATE_VALUE_MSG`   | Device sends a live/status value update          |
+| `3`   | `RESPONSE`           | Device acknowledges a command or returns a value |
 
 ---
 
-### PacketSequence
+## 5. Component IDs
 
-- **Bit 5–9**  
-- A 5-bit sequence number (0–31).  
-- For single-packet transactions (most parameter reads/writes), set to `0`.  
-- For multi-packet transfers (e.g., bulk or firmware updates), increment mod 32 on each subsequent packet.
+`ComponentID` is an 8-bit parameter namespace. Existing legacy compressor IDs are preserved at the start of the enum. Saturator IDs are assigned explicitly in the `0x80-0x9F` range.
 
----
+### 5.1 Compressor / legacy control IDs
 
-### MessageID
+The current header keeps the existing compressor-style controls:
 
-- **Bit 18–19**  
-- Indicates the type of operation:
+- `GAIN_0` ... `GAIN_5`
+- `THRESHOLD_0` ... `THRESHOLD_5`
+- `RATIO_0` ... `RATIO_5`
+- `ATTACK_0` ... `ATTACK_5`
+- `RELEASE_0` ... `RELEASE_5`
+- `MIX_0` ... `MIX_5`
+- `VU_MODE_0` ... `VU_MODE_5`
+- `COMP_TYPE_0` ... `COMP_TYPE_5`
+- `SIDE_CHAIN_0` ... `SIDE_CHAIN_5`
+- `LEVEL`, `REDUCTION`, `LEVEL_REDUCTION`
 
-| Value | Enum                   | Description                          |
-|:-----:|------------------------|--------------------------------------|
-| `0`   | `READ_VALUE_MSG`       | Host → Device: Request current value |
-| `1`   | `SET_VALUE_MSG`        | Host → Device: Set new value         |
-| `2`   | `UPDATE_VALUE_MSG`     | Device → Host: Inform of real-time change (metering) |
-| `3`   | `RESPONSE`             | Device → Host: Acknowledge or return value |
-| `4`   | `IDENTIFY_DEVICE_MSG`  | Host → Device: Request device ID      |
+### 5.2 Saturator range: `0x80-0x9F`
 
-```c
-typedef enum {
-  READ_VALUE_MSG        = 0,
-  SET_VALUE_MSG         = 1,
-  RESPONSE              = 3,
-} RSE_MSG_TYPE_ID;
-```
+| ID     | Name                     | Description                         |
+|:------:|--------------------------|-------------------------------------|
+| `0x80` | `SAT_GAIN_IN`            | Saturator input gain                |
+| `0x81` | `SAT_MIX`                | Dry/wet or processed mix            |
+| `0x82` | `SAT_GAIN_OUT`           | Saturator output gain               |
+| `0x83` | `SAT_TR_BIAS`            | Transistor stage bias               |
+| `0x84` | `SAT_PNT_BIAS`           | Pentode stage bias                  |
+| `0x85` | `SAT_TR_PNT_MIX`         | Transistor/pentode blend            |
+| `0x86` | `SAT_PREEQ_ON`           | Pre-EQ enable                       |
+| `0x87` | `SAT_PREEQ_BAND_1_GAIN`  | Pre-EQ band 1 gain                  |
+| `0x88` | `SAT_PREEQ_BAND_2_GAIN`  | Pre-EQ band 2 gain                  |
+| `0x89` | `SAT_PREEQ_BAND_3_GAIN`  | Pre-EQ band 3 gain                  |
+| `0x8A` | `SAT_POSTEQ_ON`          | Post-EQ enable                      |
+| `0x8B` | `SAT_POSTEQ_BAND_1_GAIN` | Post-EQ band 1 gain                 |
+| `0x8C` | `SAT_POSTEQ_BAND_2_GAIN` | Post-EQ band 2 gain                 |
+| `0x8D` | `SAT_POSTEQ_BAND_3_GAIN` | Post-EQ band 3 gain                 |
+| `0x8E` | `SAT_BYPASS`             | Saturator bypass                    |
 
----
+### 5.3 Host service range
 
-### ComponentID (Parameter Identifiers)
-
-- **Bit 10–17** (8 bits)  
-- Extensible “namespace” for all device parameters, meters, effects, and service codes.  
-- Partitioned by function/category.  
-
-#### 0x00–0x1F | Preamp Parameters
-
-| ID   | Name               | Description                              | MessageValue Interpretation           |
-|:----:|--------------------|------------------------------------------|----------------------------------------|
-| 0x00 | `PREAMP_GAIN`      | Input gain                               | 0–255 mapped to 0 dB … +60 dB (device-specific scaling) |
-| 0x01 | `PREAMP_IMPEDANCE` | Input impedance select                   | 0 = Lo-Z, 1 = Hi-Z                      |
-| 0x02 | `PREAMP_PHANTOM`   | Phantom power enable/disable             | 0 = Off, 1 = On                        |
-| 0x03 | `PREAMP_PAN`       | Pan position left/right                  | 0 = Full Left, 128 = Center, 255 = Full Right |
-
-*(IDs 0x04–0x1F are reserved for future preamp features.)*
-
-#### 0x20–0x3F | Compressor Parameters
-
-| ID   | Name              | Description                              | MessageValue Interpretation           |
-|:----:|-------------------|------------------------------------------|----------------------------------------|
-| 0x20 | `COMP_THRESHOLD`  | Threshold level                          | 0–255 mapped to –60 dB … 0 dB (device-specific) |
-| 0x21 | `COMP_RATIO`      | Ratio                                    | 0 = 1:1, 128 = 4:1, 255 = 20:1 (device-specific) |
-| 0x22 | `COMP_ATTACK`     | Attack time                              | 0–255 mapped to 0.1 ms … 100 ms        |
-| 0x23 | `COMP_RELEASE`    | Release time                             | 0–255 mapped to 10 ms … 1 s           |
-| 0x24 | `COMP_MAKEUP`     | Makeup gain                              | 0–255 mapped to 0 dB … +20 dB         |
-| 0x25 | `COMP_MODE`       | Compressor mode/type                     | 0 = Opto, 1 = VCA, 2 = FET …           |
-
-*(IDs 0x26–0x3F reserved for future compressor features.)*
-
-#### 0x40–0x5F | Equalizer Parameters
-
-**Band 1 (Low Shelf)**
-
-| ID   | Name           | Description                              | MessageValue Interpretation           |
-|:----:|----------------|------------------------------------------|----------------------------------------|
-| 0x40 | `EQ_BAND1_FREQ`| Center frequency                         | 0–255 mapped to 20 Hz … 500 Hz         |
-| 0x41 | `EQ_BAND1_GAIN`| Gain                                     | 0–255 mapped to –12 dB … +12 dB       |
-| 0x42 | `EQ_BAND1_Q`   | Q factor                                 | 0–255 mapped to 0.3 … 10             |
-
-**Band 2 (Mid Peak)**
-
-| ID   | Name           | Description                              | MessageValue Interpretation           |
-|:----:|----------------|------------------------------------------|----------------------------------------|
-| 0x43 | `EQ_BAND2_FREQ`| Center frequency                         | 0–255 mapped to 200 Hz … 5 kHz        |
-| 0x44 | `EQ_BAND2_GAIN`| Gain                                     | 0–255 mapped to –12 dB … +12 dB       |
-| 0x45 | `EQ_BAND2_Q`   | Q factor                                 | 0–255 mapped to 0.3 … 10             |
-
-**Band 3 (High Shelf)**
-
-| ID   | Name           | Description                              | MessageValue Interpretation           |
-|:----:|----------------|------------------------------------------|----------------------------------------|
-| 0x46 | `EQ_BAND3_FREQ`| Center frequency                         | 0–255 mapped to 1 kHz … 20 kHz        |
-| 0x47 | `EQ_BAND3_GAIN`| Gain                                     | 0–255 mapped to –12 dB … +12 dB       |
-| 0x48 | `EQ_BAND3_Q`   | Q factor                                 | 0–255 mapped to 0.3 … 10             |
-
-*(IDs 0x49–0x5F reserved for future EQ features.)*
-
-#### 0x60–0x7F | Effects (Delay, Reverb, etc.)
-
-| ID   | Name               | Description                              | MessageValue Interpretation           |
-|:----:|--------------------|------------------------------------------|----------------------------------------|
-| 0x60 | `FX_DELAY_TIME`    | Delay time                               | 0–255 mapped to 0 ms … 2000 ms        |
-| 0x61 | `FX_DELAY_FEEDBACK`| Delay feedback level                     | 0–255 mapped to 0 % … 95 %            |
-| 0x62 | `FX_REVERB_SIZE`   | Reverb algorithm size                    | 0–255 mapped to small … large hall     |
-| 0x63 | `FX_REVERB_DECAY`  | Reverb decay time                        | 0–255 mapped to 0.1 s … 10 s          |
-| 0x64 | `FX_WET_DRY`       | Wet/dry mix balance                      | 0–255 mapped to 0 % dry … 100 % wet   |
-
-*(IDs 0x65–0x7F reserved for future effect features.)*
-
-#### 0x80–0x9F | Modulation Effects (Chorus, Flanger, Phaser, etc.)
-
-*(For expandability—IDs and parameters defined per device.)*
-
-#### 0xA0–0xBF | Routing & Patchbay Settings
-
-*(For devices offering digital patch routing/matrix.)*
-
-#### 0xC0–0xDF | Dynamics (Gate, Expander, Limiter, etc.)
-
-*(Reserved for other dynamics beyond compressor.)*
-
-#### 0xE0–0xEF | Real-Time Meters & Status
-
-| ID   | Name               | Description                          | Value Interpretation         |
-|:----:|--------------------|--------------------------------------|------------------------------|
-| 0xE0 | `METER_INPUT_LEVEL`| Input level metering                 | 0–255 = –Infinity … +22 dBFu |
-| 0xE1 | `METER_OUTPUT_LEVEL`| Output level metering               | 0–255 = –Infinity … +22 dBFu |
-| 0xE2 | `METER_COMPRESSION`| Compression amount metering          | 0–255 scaled to 0 … 100 %    |
-| 0xE3 | `STATUS_TEMPERATURE`| Internal temperature (°C)            | 0–255 mapped to 0 … 255 °C  |
-
-#### 0xF0–0xFF | Service & Identification
-
-| ID   | Name               | Description                              | MessageValue Interpretation           |
-|:----:|--------------------|------------------------------------------|----------------------------------------|
-| 0xF0 | `HOST_LINE_0`      | Service/ACK channel                      | See [Error Codes](#error-handling--codes) |
-| 0xF1 | `DEVICE_ID`        | Device type identifier                   | Each device assigns a unique ID (e.g., 0x10 = “LEX Tube Compressor”) |
-| 0xF2 | `FIRMWARE_VERSION` | Firmware version (major/minor nibble)    | High nibble = major, low nibble = minor |
----
-
-### MessageValue
-
-- **8-bit unsigned** (0–255).  
-- Interpretation depends on `ComponentID`:  
-  - **Continuous parameters** (gain, frequency, time, level) are linearly or logarithmically mapped per device.  
-  - **Discrete selectors** (mode, phantom on/off) use enumerated values (e.g., 0/1).  
-  - **Identification fields** (DEVICE_ID, FIRMWARE_VERSION) use defined numeric codes or hex-packed versions.  
+| ID      | Name          | Description          |
+|:-------:|---------------|----------------------|
+| `250`   | `HOST_LINE_0` | Service / ACK line   |
+| `251`   | `HOST_LINE_1` | Service line         |
+| `252`   | `HOST_LINE_2` | Service line         |
+| `253`   | `HOST_LINE_3` | Service line         |
+| `254`   | `HOST_LINE_4` | Service line         |
+| `255`   | `HOST_LINE_5` | Service line         |
 
 ---
 
-## 4. CRC4 Calculation
+## 6. MessageValue
 
-- **Polynomial**: `0b10111`  
-- **Procedure**: Compute CRC4 over the 28 least significant bits (`ProtocolVersion` → `MessageValue`).  
-- **Result**: 4-bit CRC stored in bits 28–31.  
+`MessageValue` is an unsigned 8-bit value. Its interpretation depends on `ComponentID`:
 
-Pseudo-code (C-style):
+- Continuous parameters use device-specific scaling over `0-255`.
+- Boolean parameters usually use `0 = Off`, `1 = On`.
+- Discrete selectors use device-specific enumerated values.
+- Response packets may use command-result codes such as `GCA_COMMAND_DONE`, `GCA_COMMAND_FAILURE`, and `GCA_COMMAND_UNSUPPORTED`.
+
+---
+
+## 7. CRC4 Calculation
+
+The checksum is a 4-bit CRC over the lower 28 bits of the packet.
 
 ```c
 uint8_t compute_crc4(uint32_t packet_bits28) {
-    // `packet_bits28` = packet & 0x0FFFFFFF
-    return crc4(0, packet_bits28, 28); // Using polynomial 0b10111
+    return crc4(0, packet_bits28, 28);
 }
 ```
 
 ---
 
-## 5. Typical Command Sequences
+## 8. Typical Command Sequences
 
-### 5.1 Device Identification
+### 8.1 Read device value
 
-**PC → Device** (Identify request)
+| Packet Field     | Example value                  |
+|:-----------------|:-------------------------------|
+| ProtocolVersion  | `GCA_LINK_VER_0`               |
+| SystemID         | `GCA_NASTY_SATURATOR_ID`       |
+| PacketSequence   | `0`                            |
+| ComponentID      | `SAT_GAIN_IN`                  |
+| MessageID        | `READ_VALUE_MSG`               |
+| MessageValue     | `0`                            |
+| CheckSum         | CRC4 over lower 28 bits        |
 
-| Packet Field     | Value                                     |
-|:-------------------------|:------------------------------------------|
-| ProtocolVersion  | `1`                                       |
-| SystemID         | `RSE_LEX_MASTERCOM_ID (1)`                |
-| PacketSequence   | `0`                                       |
-| ComponentID      | `DEVICE_ID (0xF1)`                        |
-| MessageID        | `READ_VALUE_MSG (0)`                      |
-| MessageValue     | `0`                                       |
-| CheckSum         | `CRC4 over first 28 bits`                 |
+### 8.2 Set saturator parameter
 
-**Device → PC** (Identify response)
+| Packet Field     | Example value                  |
+|:-----------------|:-------------------------------|
+| ProtocolVersion  | `GCA_LINK_VER_0`               |
+| SystemID         | `GCA_NASTY_SATURATOR_ID`       |
+| PacketSequence   | `0`                            |
+| ComponentID      | `SAT_MIX`                      |
+| MessageID        | `SET_VALUE_MSG`                |
+| MessageValue     | `128`                          |
+| CheckSum         | CRC4 over lower 28 bits        |
 
-| Packet Field     | Value                                  |
-|:-----------------|:---------------------------------------|
-| ProtocolVersion  | `1`                                    |
-| SystemID         | `PC_HOST_ID (0)`                       |
-| PacketSequence   | `0`                                    |
-| ComponentID      | `DEVICE_ID (0xF1)`                     |
-| MessageID        | `RESPONSE (3)`                         |
-| MessageValue     | `0x10` (e.g., “LEX Tube Compressor”)  |
-| CheckSum         | `CRC4`                                 |
+### 8.3 ACK response
 
----
-
-### 5.2 Setting a Compressor Parameter
-
-**PC → Device** (Set threshold to 128)
-
-| Packet Field     | Value                                   |
-|:-----------------|:----------------------------------------|
-| ProtocolVersion  | `1`                                      |
-| SystemID         | `RSE_LEX_MASTERCOM_ID (1)`               |
-| PacketSequence   | `0`                                      |
-| ComponentID      | `COMP_THRESHOLD (0x20)`                  |
-| MessageID        | `SET_VALUE_MSG (1)`                      |
-| MessageValue     | `128`                                    |
-| CheckSum         | `CRC4`                                   |
-
-**Device → PC** (ACK)
-
-| Packet Field     | Value                                     |
-|:-----------------|:------------------------------------------|
-| ProtocolVersion  | `1`                                        |
-| SystemID         | `PC_HOST_ID (0)`                           |
-| PacketSequence   | `0`                                        |
-| ComponentID      | `HOST_LINE_0 (0xF0)`                       |
-| MessageID        | `RESPONSE (3)`                             |
-| MessageValue     | `RSE_COMMAND_DONE (0)`                     |
-| CheckSum         | `CRC4`                                     |
+| Packet Field     | Example value                  |
+|:-----------------|:-------------------------------|
+| ProtocolVersion  | `GCA_LINK_VER_0`               |
+| SystemID         | `PC_HOST_ID`                   |
+| PacketSequence   | `0`                            |
+| ComponentID      | `HOST_LINE_0`                  |
+| MessageID        | `RESPONSE`                     |
+| MessageValue     | `GCA_COMMAND_DONE`             |
+| CheckSum         | CRC4 over lower 28 bits        |
 
 ---
 
-### 5.3 Reading an Equalizer Band Gain
+## 9. Extension Guidelines
 
-**PC → Device** (Read EQ band 2 gain)
+When adding a new device or feature:
 
-| Packet Field     | Value                                  |
-|:-----------------|:---------------------------------------|
-| ProtocolVersion  | `1`                                     |
-| SystemID         | `RSE_LEX_MASTERCOM_ID (1)`              |
-| PacketSequence   | `0`                                     |
-| ComponentID      | `EQ_BAND2_GAIN (0x44)`                  |
-| MessageID        | `READ_VALUE_MSG (0)`                    |
-| MessageValue     | `0`                                     |
-| CheckSum         | `CRC4`                                  |
-
-**Device → PC** (Response: gain = 150)
-
-| Packet Field     | Value                                   |
-|:-----------------|:----------------------------------------|
-| ProtocolVersion  | `1`                                      |
-| SystemID         | `PC_HOST_ID (0)`                         |
-| PacketSequence   | `0`                                      |
-| ComponentID      | `EQ_BAND2_GAIN (0x44)`                   |
-| MessageID        | `RESPONSE (3)`                           |
-| MessageValue     | `150`                                    |
-| CheckSum         | `CRC4`                                   |
+1. Assign a stable `GCA_SYSTEM_ID` value for the device family.
+2. Place new `ComponentID` values into an unused or documented range.
+3. Keep existing numeric IDs stable for backward compatibility.
+4. Document the `MessageValue` scaling for each new control.
+5. If a device receives an unsupported `ComponentID`, respond with `GCA_COMMAND_UNSUPPORTED`.
 
 ---
 
-### 5.4 Real-Time Metering (33 Hz)
+## 10. Implementation Notes
 
-**Device → PC** (Example: input level meter)
-
-Sent every ~30 ms (33 Hz).
-
-| Packet Field     | Value                                         |
-|:-----------------|:----------------------------------------------|
-| ProtocolVersion  | `1`                                            |
-| SystemID         | `PC_HOST_ID (0)`                               |
-| PacketSequence   | `n` (incremented 0→31)                        |
-| ComponentID      | `METER_INPUT_LEVEL (0xE0)`                     |
-| MessageID        | `UPDATE_VALUE_MSG (2)`                         |
-| MessageValue     | Current input level (0–255)                    |
-| CheckSum         | `CRC4`                                         |
-
-Similarly, separate packets can be sent for:
-- `METER_OUTPUT_LEVEL (0xE1)`  
-- `METER_COMPRESSION (0xE2)`  
-
----
-
-## 6. Error Handling & Codes
-
-When a command cannot be executed, the device responds on `HOST_LINE_0 (0xF0)` using a `RESPONSE` packet. The `MessageValue` field is set to one of the following codes:
-
-| Code | Enum                        | Description                          |
-|:----:|-----------------------------|--------------------------------------|
-| `0`  | `RSE_COMMAND_DONE`          | Success                              |
-| `1`  | `RSE_COMMAND_FAILURE`       | General failure                      |
-| `2`  | `RSE_COMMAND_UNSUPPORTED`   | Command not supported by this device |
-| `3`  | `CRC_ERROR`                 | Checksum mismatch                    |
-| `4`  | `UNKNOWN_COMMAND`           | Invalid `MessageID`                  |
-| `5`  | `INVALID_VALUE`             | `MessageValue` out of allowed range  |
-
----
-
-## 7. ComponentID Extension Guidelines
-
-If your device supports parameters or features not defined above, follow these rules:
-
-1. **Choose an unused range** for new categories:  
-   - `0x80–0x9F`: Modulation Effects (chorus, flanger, phaser, etc.)  
-   - `0xA0–0xBF`: Routing & Patchbay Settings (matrix routing, digital I/O)  
-   - `0xC0–0xDF`: Other Dynamics (gate, expander, limiter)  
-
-2. **Assign unique `ComponentID` values** in that range.  
-3. **Define `MessageValue` encoding** precisely (e.g., 0–255 → XY parameters).  
-4. **Ensure backward compatibility**: If the host requests an unknown `ComponentID`, respond with `RSE_COMMAND_UNSUPPORTED`.  
-
-Document any new `ComponentID`s and their meaning in a device-specific appendix or README.
-
----
-
-## 8. Implementation Notes
-
-- **Endianess & Packing**  
-  - Pack bits exactly as shown in [Packet Structure](#packet-structure).  
-  - Transmit the 32-bit word with MSB first (bit 31 sent last).  
-
-- **Timing & Flow Control**  
-  - Host should wait for a `RESPONSE` (for `SET`/`READ`/`IDENTIFY`) before sending another command.  
-  - Real-time `UPDATE_VALUE_MSG` packets (metering) may be sent continuously; host software should queue or buffer as needed.  
-
-- **Firmware Version Reporting**  
-  - Use `FIRMWARE_VERSION (0xF2)` to return major/minor version:  
-    - High nibble (bits 4–7 of `MessageValue`) = major version.  
-    - Low nibble (bits 0–3 of `MessageValue`) = minor version.  
-
-- **Sequence Numbers**  
-  - For single-packet commands, set `PacketSequence = 0`.  
-  - For multi-packet transfers (e.g., firmware chunks), increment `PacketSequence` mod 32 on each subsequent packet, and check on the receiving side for missing or out-of-order packets.  
-
-- **Data Ranges**  
-  - All continuous parameter mappings (e.g., 0→255 range) must be documented per device firmware.  
-  - For discrete parameters, reserve exact numeric codes (e.g., 0 = Off`, `1 = On`).  
+- For single-packet commands, use `PacketSequence = 0`.
+- For multi-packet transfers, increment `PacketSequence` modulo 32.
+- Host software should wait for a `RESPONSE` after `SET_VALUE_MSG` and `READ_VALUE_MSG` unless a specific streaming mode defines otherwise.
+- Real-time `UPDATE_VALUE_MSG` packets may be sent continuously and should be buffered or rate-limited by the host application.
 
 ---
 
 ## License
 
 This protocol specification and reference implementation are released under the **MIT License**.
-
----
-
-_Remark: Version 1.0 is designed to be extensible across a broad range of studio effect units. For any questions or contributions, please open an issue or submit a pull request._

@@ -14,7 +14,7 @@ Supported or reserved parameter categories include:
 
 - **Preamps**: gain, impedance, phantom power, pan.
 - **Compressors**: threshold, ratio, attack, release, makeup gain, mode.
-- **Saturators**: input gain, mix, output gain, tube/transistor bias controls, pre/post EQ, bypass.
+- **Saturators**: input gain, mix, output gain, tube/transistor bias controls, EQ, bypass.
 - **Equalizers**: band frequency, gain, and Q controls.
 - **Effects**: delay, reverb, wet/dry mix, feedback.
 - **Real-time meters**: level, reduction, compression amount, temperature or status values.
@@ -44,14 +44,16 @@ The checksum covers the lower 28 bits, from `ProtocolVersion` through `MessageVa
 
 ## 3. System IDs
 
-`SystemID` identifies the packet destination or origin.
+`SystemID` identifies the packet destination or origin. Stereo devices expose separate system IDs per channel.
 
-| Value | Name                      | Description                         |
-|:-----:|---------------------------|-------------------------------------|
-| `0`   | `UNDEFINED_SYS_ID`        | Undefined / invalid system          |
-| `1`   | `PC_HOST_ID`              | Host PC                             |
-| `2`   | `GCA_LEX_MASTERCOM_ID`    | GlowCore Audio LEX compressor       |
-| `3`   | `GCA_NASTY_SATURATOR_ID`  | GlowCore Audio Nasty tube saturator |
+| Value | Name                           | Description                                  |
+|:-----:|--------------------------------|----------------------------------------------|
+| `0`   | `UNDEFINED_SYS_ID`             | Undefined / invalid system                   |
+| `1`   | `PC_HOST_ID`                   | Host PC                                      |
+| `2`   | `GCA_LEX_MASTERCOM_CH1_ID`     | GlowCore Audio LEX compressor, channel 1     |
+| `3`   | `GCA_LEX_MASTERCOM_CH2_ID`     | GlowCore Audio LEX compressor, channel 2     |
+| `4`   | `GCA_NASTY_SATURATOR_CH1_ID`   | GlowCore Audio Nasty tube saturator, channel 1 |
+| `5`   | `GCA_NASTY_SATURATOR_CH2_ID`   | GlowCore Audio Nasty tube saturator, channel 2 |
 
 Current C definition:
 
@@ -59,8 +61,10 @@ Current C definition:
 typedef enum{
 UNDEFINED_SYS_ID = 0,
 PC_HOST_ID,
-GCA_LEX_MASTERCOM_ID,
-GCA_NASTY_SATURATOR_ID
+GCA_LEX_MASTERCOM_CH1_ID,
+GCA_LEX_MASTERCOM_CH2_ID,
+GCA_NASTY_SATURATOR_CH1_ID,
+GCA_NASTY_SATURATOR_CH2_ID
 }GCA_SYSTEM_ID;
 ```
 
@@ -98,23 +102,22 @@ The current header keeps the existing compressor-style controls:
 
 ### 5.2 Saturator range: `0x80-0x9F`
 
-| ID     | Name                     | Description                         |
-|:------:|--------------------------|-------------------------------------|
-| `0x80` | `SAT_GAIN_IN`            | Saturator input gain                |
-| `0x81` | `SAT_MIX`                | Dry/wet or processed mix            |
-| `0x82` | `SAT_GAIN_OUT`           | Saturator output gain               |
-| `0x83` | `SAT_TR_BIAS`            | Transistor stage bias               |
-| `0x84` | `SAT_PNT_BIAS`           | Pentode stage bias                  |
-| `0x85` | `SAT_TR_PNT_MIX`         | Transistor/pentode blend            |
-| `0x86` | `SAT_PREEQ_ON`           | Pre-EQ enable                       |
-| `0x87` | `SAT_PREEQ_BAND_1_GAIN`  | Pre-EQ band 1 gain                  |
-| `0x88` | `SAT_PREEQ_BAND_2_GAIN`  | Pre-EQ band 2 gain                  |
-| `0x89` | `SAT_PREEQ_BAND_3_GAIN`  | Pre-EQ band 3 gain                  |
-| `0x8A` | `SAT_POSTEQ_ON`          | Post-EQ enable                      |
-| `0x8B` | `SAT_POSTEQ_BAND_1_GAIN` | Post-EQ band 1 gain                 |
-| `0x8C` | `SAT_POSTEQ_BAND_2_GAIN` | Post-EQ band 2 gain                 |
-| `0x8D` | `SAT_POSTEQ_BAND_3_GAIN` | Post-EQ band 3 gain                 |
-| `0x8E` | `SAT_BYPASS`             | Saturator bypass                    |
+| ID     | Name                    | Description                         |
+|:------:|-------------------------|-------------------------------------|
+| `0x80` | `SAT_GAIN_IN`           | Saturator input gain                |
+| `0x81` | `SAT_MIX`               | Dry/wet or processed mix            |
+| `0x82` | `SAT_GAIN_OUT`          | Saturator output gain               |
+| `0x83` | `SAT_TR_BIAS`           | Transistor stage bias               |
+| `0x84` | `SAT_PNT_BIAS`          | Pentode stage bias                  |
+| `0x85` | `SAT_TR_PNT_MIX`        | Transistor/pentode blend            |
+| `0x86` | `SAT_PREEQ_ON`          | EQ enable                           |
+| `0x87` | `SAT_EQ_BAND_1_GAIN`    | EQ band 1 gain                      |
+| `0x88` | `SAT_EQ_BAND_2_GAIN`    | EQ band 2 gain                      |
+| `0x89` | `SAT_EQ_BAND_3_GAIN`    | EQ band 3 gain                      |
+| `0x8A` | `SAT_POSTEQ_ON`         | Post-EQ enable                      |
+| `0x8E` | `SAT_BYPASS`            | Saturator bypass                    |
+
+`0x8B-0x8D` are currently unused/reserved.
 
 ### 5.3 Host service range
 
@@ -156,39 +159,39 @@ uint8_t compute_crc4(uint32_t packet_bits28) {
 
 ### 8.1 Read device value
 
-| Packet Field     | Example value                  |
-|:-----------------|:-------------------------------|
-| ProtocolVersion  | `GCA_LINK_VER_0`               |
-| SystemID         | `GCA_NASTY_SATURATOR_ID`       |
-| PacketSequence   | `0`                            |
-| ComponentID      | `SAT_GAIN_IN`                  |
-| MessageID        | `READ_VALUE_MSG`               |
-| MessageValue     | `0`                            |
-| CheckSum         | CRC4 over lower 28 bits        |
+| Packet Field     | Example value                    |
+|:-----------------|:---------------------------------|
+| ProtocolVersion  | `GCA_LINK_VER_0`                 |
+| SystemID         | `GCA_NASTY_SATURATOR_CH1_ID`     |
+| PacketSequence   | `0`                              |
+| ComponentID      | `SAT_GAIN_IN`                    |
+| MessageID        | `READ_VALUE_MSG`                 |
+| MessageValue     | `0`                              |
+| CheckSum         | CRC4 over lower 28 bits          |
 
 ### 8.2 Set saturator parameter
 
-| Packet Field     | Example value                  |
-|:-----------------|:-------------------------------|
-| ProtocolVersion  | `GCA_LINK_VER_0`               |
-| SystemID         | `GCA_NASTY_SATURATOR_ID`       |
-| PacketSequence   | `0`                            |
-| ComponentID      | `SAT_MIX`                      |
-| MessageID        | `SET_VALUE_MSG`                |
-| MessageValue     | `128`                          |
-| CheckSum         | CRC4 over lower 28 bits        |
+| Packet Field     | Example value                    |
+|:-----------------|:---------------------------------|
+| ProtocolVersion  | `GCA_LINK_VER_0`                 |
+| SystemID         | `GCA_NASTY_SATURATOR_CH1_ID`     |
+| PacketSequence   | `0`                              |
+| ComponentID      | `SAT_MIX`                        |
+| MessageID        | `SET_VALUE_MSG`                  |
+| MessageValue     | `128`                            |
+| CheckSum         | CRC4 over lower 28 bits          |
 
 ### 8.3 ACK response
 
-| Packet Field     | Example value                  |
-|:-----------------|:-------------------------------|
-| ProtocolVersion  | `GCA_LINK_VER_0`               |
-| SystemID         | `PC_HOST_ID`                   |
-| PacketSequence   | `0`                            |
-| ComponentID      | `HOST_LINE_0`                  |
-| MessageID        | `RESPONSE`                     |
-| MessageValue     | `GCA_COMMAND_DONE`             |
-| CheckSum         | CRC4 over lower 28 bits        |
+| Packet Field     | Example value                    |
+|:-----------------|:---------------------------------|
+| ProtocolVersion  | `GCA_LINK_VER_0`                 |
+| SystemID         | `PC_HOST_ID`                     |
+| PacketSequence   | `0`                              |
+| ComponentID      | `HOST_LINE_0`                    |
+| MessageID        | `RESPONSE`                       |
+| MessageValue     | `GCA_COMMAND_DONE`               |
+| CheckSum         | CRC4 over lower 28 bits          |
 
 ---
 
@@ -196,7 +199,7 @@ uint8_t compute_crc4(uint32_t packet_bits28) {
 
 When adding a new device or feature:
 
-1. Assign a stable `GCA_SYSTEM_ID` value for the device family.
+1. Assign a stable `GCA_SYSTEM_ID` value for the device family/channel.
 2. Place new `ComponentID` values into an unused or documented range.
 3. Keep existing numeric IDs stable for backward compatibility.
 4. Document the `MessageValue` scaling for each new control.

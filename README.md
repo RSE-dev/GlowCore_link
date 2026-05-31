@@ -1,221 +1,155 @@
-# GlowCore Audio Serial Control Protocol
+# NastySaturator F405 Firmware
 
-**Version 1.0**
+Firmware for the GlowCore Audio / RSE Audio **NastySaturator** hardware platform based on the STM32F405 family.
 
-This repository contains the specification and reference implementation of a compact USB-based control protocol for GlowCore Audio studio effect devices, including tube compressors, tube saturators, equalizers, preamps, and future hardware units.
+This repository is intended to be the source of truth for the embedded firmware used by the NastySaturator device and for further assisted development through GitHub/Codex workflows.
 
----
+## Project status
 
-## 1. Overview
+Initial firmware import is complete. The repository is being prepared for structured development, review, and future feature work.
 
-The protocol defines a fixed 32-bit message format for bidirectional control and status monitoring between a host PC and a connected audio hardware device. By standardizing the packet layout and using an extensible `ComponentID` namespace, the same link layer can support multiple device families without changing the packet format.
+Current known target:
 
-Supported or reserved parameter categories include:
+- MCU family: STM32F405
+- Board/project name: NastySaturator_F405
+- Device type: stereo tube/transistor/pentode saturator controller
+- Repository visibility: private
 
-- **Preamps**: gain, impedance, phantom power, pan.
-- **Compressors**: threshold, ratio, attack, release, makeup gain, mode.
-- **Saturators**: input gain, mix, output gain, tube/transistor bias controls, EQ, bypass.
-- **Equalizers**: band frequency, gain, and Q controls.
-- **Effects**: delay, reverb, wet/dry mix, feedback.
-- **Real-time meters**: level, reduction, compression amount, temperature or status values.
-- **Service and identification**: device ID, firmware version, host-service channel.
+Hardware details, exact pinout, and build instructions should be kept synchronized with the actual STM32Cube project files and schematics.
 
----
+## What this firmware controls
 
-## 2. Packet Structure
+The NastySaturator firmware is expected to handle low-level control and device state for a digitally controlled analog saturation unit, including features such as:
 
-All messages are exactly **32 bits** / **4 bytes**.
+- input/output gain control;
+- dry/wet or processed mix control;
+- transistor/pentode bias or blend control;
+- EQ or bypass-related controls;
+- USB or serial communication with host software;
+- device identification and status reporting;
+- future motorized/servo-driven or GPIO-controlled hardware functions where applicable.
+
+The exact feature list must follow the implemented firmware and hardware revision.
+
+## Repository layout
+
+The repository was imported from a local firmware working directory. Typical STM32 firmware projects may contain files and folders such as:
 
 ```text
-┌───────────────────────────────────────────────────────────┐
-| 0–2   | ProtocolVersion  | Protocol version              |  3 bits |
-| 3–4   | SystemID         | Host/device ID                 |  2 bits |
-| 5–9   | PacketSequence   | Packet sequence number         |  5 bits |
-| 10–17 | ComponentID      | Component/parameter ID         |  8 bits |
-| 18–19 | MessageID        | Message type                   |  2 bits |
-| 20–27 | MessageValue     | Payload value                  |  8 bits |
-| 28–31 | CheckSum         | CRC4 over lower 28 bits        |  4 bits |
-└───────────────────────────────────────────────────────────┘
+Core/
+Drivers/
+Middlewares/
+Startup/
+*.ioc
 ```
 
-The checksum covers the lower 28 bits, from `ProtocolVersion` through `MessageValue`.
+Generated build output, temporary files, IDE cache files, object files, binaries, and local machine settings should not be committed.
 
----
+## Build environment
 
-## 3. System IDs
+Recommended baseline tools:
 
-`SystemID` identifies the packet destination or origin. Stereo devices expose separate system IDs per channel.
+- STM32CubeIDE or compatible STM32CubeMX-generated project workflow;
+- ARM GCC toolchain matching the project configuration;
+- ST-LINK or another compatible debug/programming interface;
+- Git for version control.
 
-| Value | Name                           | Description                                  |
-|:-----:|--------------------------------|----------------------------------------------|
-| `0`   | `UNDEFINED_SYS_ID`             | Undefined / invalid system                   |
-| `1`   | `PC_HOST_ID`                   | Host PC                                      |
-| `2`   | `GCA_LEX_MASTERCOM_CH1_ID`     | GlowCore Audio LEX compressor, channel 1     |
-| `3`   | `GCA_LEX_MASTERCOM_CH2_ID`     | GlowCore Audio LEX compressor, channel 2     |
-| `4`   | `GCA_NASTY_SATURATOR_CH1_ID`   | GlowCore Audio Nasty tube saturator, channel 1 |
-| `5`   | `GCA_NASTY_SATURATOR_CH2_ID`   | GlowCore Audio Nasty tube saturator, channel 2 |
+Until the build procedure is fully documented, use the original STM32CubeIDE project settings as the authoritative build configuration.
 
-Current C definition:
+## Building
 
-```c
-typedef enum{
-UNDEFINED_SYS_ID = 0,
-PC_HOST_ID,
-GCA_LEX_MASTERCOM_CH1_ID,
-GCA_LEX_MASTERCOM_CH2_ID,
-GCA_NASTY_SATURATOR_CH1_ID,
-GCA_NASTY_SATURATOR_CH2_ID
-}GCA_SYSTEM_ID;
+Open the project in STM32CubeIDE and build the active firmware configuration.
+
+Suggested local workflow:
+
+```powershell
+git pull
+# open/build in STM32CubeIDE
+git status
 ```
 
----
+Build artifacts such as `.elf`, `.hex`, `.bin`, `.map`, `.o`, and dependency files must remain untracked unless there is a specific release reason to store them separately.
 
-## 4. Message IDs
+## Flashing and debugging
 
-| Value | Enum                 | Description                                      |
-|:-----:|----------------------|--------------------------------------------------|
-| `0`   | `READ_VALUE_MSG`     | Host requests the current parameter value        |
-| `1`   | `SET_VALUE_MSG`      | Host sets a new parameter value                  |
-| `2`   | `UPDATE_VALUE_MSG`   | Device sends a live/status value update          |
-| `3`   | `RESPONSE`           | Device acknowledges a command or returns a value |
+Use the debug/programming setup defined by the hardware revision. Typical options include:
 
----
+- ST-LINK via SWD;
+- STM32CubeProgrammer;
+- STM32CubeIDE debug configuration.
 
-## 5. Component IDs
+Before flashing unknown hardware, verify:
 
-`ComponentID` is an 8-bit parameter namespace. Existing legacy compressor IDs are preserved at the start of the enum. Saturator IDs are assigned explicitly in the `0x80-0x9F` range.
+- board revision;
+- power supply voltages;
+- SWD pinout;
+- boot pin state;
+- connected analog hardware safety conditions.
 
-### 5.1 Compressor / legacy control IDs
+## Communication protocol
 
-The current header keeps the existing compressor-style controls:
+The firmware should keep the host communication protocol stable and documented. For NastySaturator-related control IDs, keep numeric values backward-compatible once released.
 
-- `GAIN_0` ... `GAIN_5`
-- `THRESHOLD_0` ... `THRESHOLD_5`
-- `RATIO_0` ... `RATIO_5`
-- `ATTACK_0` ... `ATTACK_5`
-- `RELEASE_0` ... `RELEASE_5`
-- `MIX_0` ... `MIX_5`
-- `VU_MODE_0` ... `VU_MODE_5`
-- `COMP_TYPE_0` ... `COMP_TYPE_5`
-- `SIDE_CHAIN_0` ... `SIDE_CHAIN_5`
-- `LEVEL`, `REDUCTION`, `LEVEL_REDUCTION`
+Expected saturator-related controls include, but are not limited to:
 
-### 5.2 Saturator range: `0x80-0x9F`
+| Control | Purpose |
+| --- | --- |
+| `SAT_GAIN_IN` | Input gain |
+| `SAT_MIX` | Dry/wet or processed mix |
+| `SAT_GAIN_OUT` | Output gain |
+| `SAT_TR_BIAS` | Transistor stage bias |
+| `SAT_PNT_BIAS` | Pentode stage bias |
+| `SAT_TR_PNT_MIX` | Transistor/pentode blend |
+| `SAT_PREEQ_ON` | Pre-EQ enable |
+| `SAT_POSTEQ_ON` | Post-EQ enable |
+| `SAT_BYPASS` | Hardware or logical bypass |
 
-| ID     | Name                    | Description                         |
-|:------:|-------------------------|-------------------------------------|
-| `0x80` | `SAT_GAIN_IN`           | Saturator input gain                |
-| `0x81` | `SAT_MIX`               | Dry/wet or processed mix            |
-| `0x82` | `SAT_GAIN_OUT`          | Saturator output gain               |
-| `0x83` | `SAT_TR_BIAS`           | Transistor stage bias               |
-| `0x84` | `SAT_PNT_BIAS`          | Pentode stage bias                  |
-| `0x85` | `SAT_TR_PNT_MIX`        | Transistor/pentode blend            |
-| `0x86` | `SAT_PREEQ_ON`          | EQ enable                           |
-| `0x87` | `SAT_EQ_BAND_1_GAIN`    | EQ band 1 gain                      |
-| `0x88` | `SAT_EQ_BAND_2_GAIN`    | EQ band 2 gain                      |
-| `0x89` | `SAT_EQ_BAND_3_GAIN`    | EQ band 3 gain                      |
-| `0x8A` | `SAT_POSTEQ_ON`         | Post-EQ enable                      |
-| `0x8E` | `SAT_BYPASS`            | Saturator bypass                    |
+If protocol definitions are implemented in headers, update this README whenever public IDs or scaling rules change.
 
-`0x8B-0x8D` are currently unused/reserved.
+## Development workflow
 
-### 5.3 Host service range
+Use branches for non-trivial changes:
 
-| ID      | Name          | Description          |
-|:-------:|---------------|----------------------|
-| `250`   | `HOST_LINE_0` | Service / ACK line   |
-| `251`   | `HOST_LINE_1` | Service line         |
-| `252`   | `HOST_LINE_2` | Service line         |
-| `253`   | `HOST_LINE_3` | Service line         |
-| `254`   | `HOST_LINE_4` | Service line         |
-| `255`   | `HOST_LINE_5` | Service line         |
-
----
-
-## 6. MessageValue
-
-`MessageValue` is an unsigned 8-bit value. Its interpretation depends on `ComponentID`:
-
-- Continuous parameters use device-specific scaling over `0-255`.
-- Boolean parameters usually use `0 = Off`, `1 = On`.
-- Discrete selectors use device-specific enumerated values.
-- Response packets may use command-result codes such as `GCA_COMMAND_DONE`, `GCA_COMMAND_FAILURE`, and `GCA_COMMAND_UNSUPPORTED`.
-
----
-
-## 7. CRC4 Calculation
-
-The checksum is a 4-bit CRC over the lower 28 bits of the packet.
-
-```c
-uint8_t compute_crc4(uint32_t packet_bits28) {
-    return crc4(0, packet_bits28, 28);
-}
+```powershell
+git checkout main
+git pull
+git checkout -b feature/short-description
 ```
 
----
+After changes:
 
-## 8. Typical Command Sequences
+```powershell
+git status
+git add <files>
+git commit -m "Describe the firmware change"
+git push -u origin feature/short-description
+```
 
-### 8.1 Read device value
+Open a pull request or request review before merging into `main`.
 
-| Packet Field     | Example value                    |
-|:-----------------|:---------------------------------|
-| ProtocolVersion  | `GCA_LINK_VER_0`                 |
-| SystemID         | `GCA_NASTY_SATURATOR_CH1_ID`     |
-| PacketSequence   | `0`                              |
-| ComponentID      | `SAT_GAIN_IN`                    |
-| MessageID        | `READ_VALUE_MSG`                 |
-| MessageValue     | `0`                              |
-| CheckSum         | CRC4 over lower 28 bits          |
+## Working with Codex / AI agents
 
-### 8.2 Set saturator parameter
+When using Codex or another AI coding assistant:
 
-| Packet Field     | Example value                    |
-|:-----------------|:---------------------------------|
-| ProtocolVersion  | `GCA_LINK_VER_0`                 |
-| SystemID         | `GCA_NASTY_SATURATOR_CH1_ID`     |
-| PacketSequence   | `0`                              |
-| ComponentID      | `SAT_MIX`                        |
-| MessageID        | `SET_VALUE_MSG`                  |
-| MessageValue     | `128`                            |
-| CheckSum         | CRC4 over lower 28 bits          |
+1. Treat GitHub as the current source of truth.
+2. Read the latest version of any file before modifying it.
+3. Prefer small, reviewable commits.
+4. Do not invent hardware pin assignments or protocol IDs without checking project files or schematics.
+5. Keep generated output out of the repository.
+6. For complete file rewrites, provide the full resulting file content.
 
-### 8.3 ACK response
+## Safety notes
 
-| Packet Field     | Example value                    |
-|:-----------------|:---------------------------------|
-| ProtocolVersion  | `GCA_LINK_VER_0`                 |
-| SystemID         | `PC_HOST_ID`                     |
-| PacketSequence   | `0`                              |
-| ComponentID      | `HOST_LINE_0`                    |
-| MessageID        | `RESPONSE`                       |
-| MessageValue     | `GCA_COMMAND_DONE`               |
-| CheckSum         | CRC4 over lower 28 bits          |
+This firmware controls real analog audio hardware. Changes may affect relays, bias networks, gain stages, servos, power sequencing, or other hardware-connected functions.
 
----
+Before testing firmware on real hardware:
 
-## 9. Extension Guidelines
-
-When adding a new device or feature:
-
-1. Assign a stable `GCA_SYSTEM_ID` value for the device family/channel.
-2. Place new `ComponentID` values into an unused or documented range.
-3. Keep existing numeric IDs stable for backward compatibility.
-4. Document the `MessageValue` scaling for each new control.
-5. If a device receives an unsupported `ComponentID`, respond with `GCA_COMMAND_UNSUPPORTED`.
-
----
-
-## 10. Implementation Notes
-
-- For single-packet commands, use `PacketSequence = 0`.
-- For multi-packet transfers, increment `PacketSequence` modulo 32.
-- Host software should wait for a `RESPONSE` after `SET_VALUE_MSG` and `READ_VALUE_MSG` unless a specific streaming mode defines otherwise.
-- Real-time `UPDATE_VALUE_MSG` packets may be sent continuously and should be buffered or rate-limited by the host application.
-
----
+- confirm safe default GPIO states;
+- check that outputs do not momentarily enable unsafe analog states during reset/startup;
+- verify boot pin behavior;
+- test with current-limited supplies where appropriate;
+- avoid connecting valuable audio equipment until the control behavior is verified.
 
 ## License
 
-This protocol specification and reference implementation are released under the **MIT License**.
+License status is not finalized in this repository. Add a `LICENSE` file before distributing the firmware outside the private development workflow.
